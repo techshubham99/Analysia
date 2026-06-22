@@ -20,6 +20,31 @@ export interface WalletState {
   network: "testnet" | "mainnet";
   freighterDetected: boolean;
   error: string | null;
+  /** When true, shows a manual address input field */
+  showManualInput: boolean;
+}
+
+/** Run a promise with a timeout. Rejects if it doesn't settle within ms. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
+/** Check if Freighter extension is injected into the page.
+ *  Freighter's content script sets `window.freighter` to a boolean. */
+function isFreighterInstalled(): boolean {
+  if (typeof window === "undefined") return false;
+  // Direct flag set by Freighter content script
+  if ((window as any).freighter !== undefined) return true;
+  // Check freighterApi as a backup detection method
+  if ((window as any).freighterApi !== undefined) return true;
+  // Check if the stellar namespace exists (older versions)
+  if ((window as any).stellar?.freighter) return true;
+  return false;
 }
 
 export function useWallet() {
@@ -29,26 +54,16 @@ export function useWallet() {
     network: "testnet",
     freighterDetected: false,
     error: null,
+    showManualInput: false,
   });
 
-  /** Check if Freighter extension is installed.
-   *  Freighter sets `window.freighter` to a boolean when installed.
-   *  `isConnected()` also checks this as a fast path. */
-  const detectFreighter = useCallback(() => {
-    const detected =
-      typeof window !== "undefined" &&
-      typeof (window as any).freighter !== "undefined";
-    setWallet((prev) => ({ ...prev, freighterDetected: detected }));
-    return detected;
-  }, []);
-
   /** Attempt to connect the Freighter wallet.
-   *  Does NOT throw — all errors are returned via the `error` field. */
+   *  Never throws — all errors returned via `error` field. */
   const connect = useCallback(async () => {
-    // Clear previous error
-    setWallet((prev) => ({ ...prev, error: null }));
+    console.log("[Wallet] Connect requested");
+    setWallet((prev) => ({ ...prev, error: null, showManualInput: false }));
 
-    // 1. Check we're in a browser
+    // 1. Must be browser
     if (typeof window === "undefined") {
       setWallet((prev) => ({
         ...prev,
@@ -58,49 +73,103 @@ export function useWallet() {
     }
 
     // 2. Check Freighter is installed
-    const hasFreighter = (window as any).freighter !== undefined;
-    if (!hasFreighter) {
+    const installed = isFreighterInstalled();
+    console.log("[Wallet] Freighter installed:", installed);
+    console.log("[Wallet] window.freighter:", (window as any).freighter);
+    console.log("[Wallet] window.freighterApi:", (window as any).freighterApi);
+
+    if (!installed) {
       setWallet((prev) => ({
         ...prev,
-        freighterDetected: false,
-        error: "Freighter not detected.\nPlease install the Freighter browser extension.",
+        error: "Freighter not detected. Please install the Freighter browser extension, then refresh the page.",
+        showManualInput: true,
       }));
       return;
     }
     setWallet((prev) => ({ ...prev, freighterDetected: true }));
 
-    // 3. Try to get the already-allowed address (won't prompt the user)
-    const addrRes = await getAddress();
-    if (addrRes.address) {
-      setWallet({
-        address: addrRes.address,
-        connected: true,
-        network: getActiveNetwork(),
-        freighterDetected: true,
-        error: null,
-      });
-      return;
+    // 3. Try isConnected first (checks window.freighter flag fast, or falls back to postMessage with 2s timeout)
+    try {
+      const connRes = await withTimeout(isConnected(), 5000, "isConnected");
+      console.log("[Wallet] isConnected result:", connRes);
+      if (connRes.isConnected) {
+        // Already connected — get the address
+        const addrRes = await withTimeout(getAddress(), 5000, "getAddress");
+        console.log("[Wallet] getAddress result:", addrRes);
+        if (addrRes.address) {
+          setWallet({
+            address: addrRes.address,
+            connected: true,
+            network: getActiveNetwork(),
+            freighterDetected: true,
+            error: null,
+            showManualInput: false,
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("[Wallet] isConnected/getAddress failed:", e);
+      // Fall through to requestAccess
     }
 
-    // 4. Not yet allowed — request access (this WILL prompt the user)
-    const accessRes = await requestAccess();
-    if (accessRes.address) {
-      setWallet({
-        address: accessRes.address,
-        connected: true,
-        network: getActiveNetwork(),
-        freighterDetected: true,
-        error: null,
-      });
+    // 4. Not connected — request access (prompts the Freighter popup)
+    try {
+      console.log("[Wallet] Calling requestAccess...");
+      const accessRes = await withTimeout(requestAccess(), 30000, "requestAccess");
+      console.log("[Wallet] requestAccess result:", accessRes);
+
+      if (accessRes.address) {
+        setWallet({
+          address: accessRes.address,
+          connected: true,
+          network: getActiveNetwork(),
+          freighterDetected: true,
+          error: null,
+          showManualInput: false,
+        });
+        return;
+      }
+
+      // Error from Freighter
+      const errMsg = accessRes.error?.message || "Could not connect. Freighter may not be unlocked or the request was rejected.";
+      console.warn("[Wallet] requestAccess error:", errMsg);
+      setWallet((prev) => ({
+        ...prev,
+        error: errMsg,
+        showManualInput: true,
+      }));
+    } catch (e: any) {
+      console.error("[Wallet] requestAccess threw:", e);
+      setWallet((prev) => ({
+        ...prev,
+        error: e?.message || "Freighter did not respond. Make sure Freighter is unlocked and try again.",
+        showManualInput: true,
+      }));
+    }
+  }, []);
+
+  /** Allow user to manually enter their wallet address (bypass Freighter auto-connect) */
+  const setManualAddress = useCallback((address: string) => {
+    if (address.length !== 56 || !address.startsWith("G")) {
+      setWallet((prev) => ({
+        ...prev,
+        error: "Invalid Stellar address. It should start with 'G' and be 56 characters long.",
+      }));
       return;
     }
+    setWallet({
+      address,
+      connected: true,
+      network: getActiveNetwork(),
+      freighterDetected: wallet.freighterDetected,
+      error: null,
+      showManualInput: false,
+    });
+  }, [wallet.freighterDetected]);
 
-    // 5. User rejected or something went wrong
-    const errMsg = accessRes.error?.message || "Connection rejected by user.";
-    setWallet((prev) => ({
-      ...prev,
-      error: errMsg,
-    }));
+  const dismissManualInput = useCallback(() => {
+    setWallet((prev) => ({ ...prev, showManualInput: false, error: null }));
   }, []);
 
   const disconnect = useCallback(() => {
@@ -110,31 +179,44 @@ export function useWallet() {
       network: "testnet",
       freighterDetected: true,
       error: null,
+      showManualInput: false,
     });
   }, []);
 
-  // On mount, detect Freighter and try to auto-connect
+  // On mount, auto-detect and try to silently reconnect
   useEffect(() => {
-    detectFreighter();
-    const check = async () => {
-      const { isConnected: conn } = await isConnected();
-      if (conn) {
-        const addrRes = await getAddress();
-        if (addrRes.address) {
-          setWallet({
-            address: addrRes.address,
-            connected: true,
-            network: getActiveNetwork(),
-            freighterDetected: true,
-            error: null,
-          });
+    const installed = isFreighterInstalled();
+    setWallet((prev) => ({ ...prev, freighterDetected: installed }));
+    console.log("[Wallet] Mounted, Freighter installed:", installed);
+
+    if (!installed) return;
+
+    const autoConnect = async () => {
+      try {
+        const connRes = await withTimeout(isConnected(), 5000, "autoConnect");
+        if (connRes.isConnected) {
+          const addrRes = await withTimeout(getAddress(), 5000, "autoGetAddress");
+          if (addrRes.address) {
+            console.log("[Wallet] Auto-connected:", addrRes.address);
+            setWallet({
+              address: addrRes.address,
+              connected: true,
+              network: getActiveNetwork(),
+              freighterDetected: true,
+              error: null,
+              showManualInput: false,
+            });
+          }
         }
+      } catch (e) {
+        // Silent fail — user can click Connect button
+        console.warn("[Wallet] Auto-connect skipped:", e);
       }
     };
-    check();
-  }, [detectFreighter]);
+    autoConnect();
+  }, []);
 
-  return { wallet, connect, disconnect };
+  return { wallet, connect, disconnect, setManualAddress, dismissManualInput };
 }
 
 // ─────────────── Generated Typed Client ───────────────

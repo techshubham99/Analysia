@@ -11,7 +11,7 @@ import { setActiveNetwork } from "@/lib/stellar";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const { wallet, connect, disconnect } = useWallet();
+  const { wallet, connect, disconnect, setManualAddress, dismissManualInput } = useWallet();
 
   const handleNetworkChange = useCallback((n: "testnet" | "mainnet") => {
     setActiveNetwork(n);
@@ -23,6 +23,8 @@ export default function Home() {
         wallet={wallet}
         onConnect={connect}
         onDisconnect={disconnect}
+        onSetManualAddress={setManualAddress}
+        onDismissManualInput={dismissManualInput}
         onNetworkChange={handleNetworkChange}
         activeTab={activeTab}
         onTabChange={setActiveTab}

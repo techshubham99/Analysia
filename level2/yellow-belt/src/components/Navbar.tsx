@@ -3,12 +3,14 @@
 import { WalletState } from "@/hooks/contract";
 import { setActiveNetwork, getActiveNetwork } from "@/lib/stellar";
 import { truncateAddress } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 interface NavbarProps {
   wallet: WalletState;
   onConnect: () => void;
   onDisconnect: () => void;
+  onSetManualAddress: (address: string) => void;
+  onDismissManualInput: () => void;
   onNetworkChange: (n: "testnet" | "mainnet") => void;
   activeTab: string;
   onTabChange: (tab: string) => void;
@@ -25,12 +27,15 @@ export default function Navbar({
   wallet,
   onConnect,
   onDisconnect,
+  onSetManualAddress,
+  onDismissManualInput,
   onNetworkChange,
   activeTab,
   onTabChange,
 }: NavbarProps) {
   const [connecting, setConnecting] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [manualAddr, setManualAddr] = useState("");
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -46,6 +51,11 @@ export default function Navbar({
       getActiveNetwork() === "testnet" ? "mainnet" : "testnet";
     setActiveNetwork(newNetwork);
     onNetworkChange(newNetwork);
+  };
+
+  const handleManualSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSetManualAddress(manualAddr.trim());
   };
 
   return (
@@ -131,7 +141,7 @@ export default function Navbar({
             </span>
           </button>
 
-          {/* Wallet */}
+          {/* Wallet area */}
           {wallet.connected ? (
             <div className="flex animate-fadeIn items-center gap-2">
               <div className="hidden rounded-lg bg-zinc-900 px-3 py-1.5 text-sm text-zinc-300 transition-all sm:block hover:bg-zinc-800">
@@ -145,11 +155,49 @@ export default function Navbar({
                 Disconnect
               </button>
             </div>
+          ) : wallet.showManualInput ? (
+            /* Manual address input (Freighter failed or not installed) */
+            <form onSubmit={handleManualSubmit} className="flex animate-fadeIn items-center gap-2">
+              <input
+                type="text"
+                value={manualAddr}
+                onChange={(e) => setManualAddr(e.target.value)}
+                placeholder="G... (paste your address)"
+                className="w-52 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-indigo-600"
+              />
+              <button
+                type="submit"
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-all hover:bg-indigo-500"
+              >
+                Use
+              </button>
+              <button
+                type="button"
+                onClick={onDismissManualInput}
+                className="rounded-lg px-2 py-1.5 text-sm text-zinc-500 hover:text-zinc-300"
+              >
+                ✕
+              </button>
+            </form>
           ) : (
             <div className="relative">
+              {/* Error tooltip */}
               {wallet.error && !connecting && (
-                <div className="absolute bottom-full right-0 mb-2 w-64 animate-slideUp rounded-lg bg-red-600/10 p-2 text-xs text-red-400 shadow-lg backdrop-blur">
-                  {wallet.error}
+                <div
+                  className="absolute bottom-full right-0 mb-2 w-72 animate-slideUp rounded-lg bg-red-600/10 p-3 text-xs text-red-400 shadow-lg backdrop-blur"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="mt-0.5 shrink-0">⚠️</span>
+                    <div>
+                      <p className="whitespace-pre-wrap">{wallet.error}</p>
+                      <button
+                        onClick={handleConnect}
+                        className="mt-1.5 text-indigo-400 underline hover:text-indigo-300"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               <button
