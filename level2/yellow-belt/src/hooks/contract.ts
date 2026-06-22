@@ -18,6 +18,8 @@ export interface WalletState {
   address: string | null;
   connected: boolean;
   network: "testnet" | "mainnet";
+  freighterDetected: boolean;
+  error: string | null;
 }
 
 export function useWallet() {
@@ -25,33 +27,75 @@ export function useWallet() {
     address: null,
     connected: false,
     network: "testnet",
+    freighterDetected: false,
+    error: null,
   });
 
+  const detectFreighter = useCallback(() => {
+    const detected =
+      typeof window !== "undefined" &&
+      (window as any).stellar?.freighter?.isConnected !== undefined;
+    setWallet((prev) => ({ ...prev, freighterDetected: detected }));
+    return detected;
+  }, []);
+
   const connect = useCallback(async () => {
+    setWallet((prev) => ({ ...prev, error: null }));
     try {
+      // Check if Freighter is installed
+      const detected = detectFreighter();
+      if (!detected) {
+        setWallet((prev) => ({
+          ...prev,
+          error: "Freighter not detected. Install the Freighter browser extension.",
+        }));
+        return;
+      }
+
       const connectRes = await isConnected();
       if (!connectRes.isConnected) {
-        const accessRes = await requestAccess();
-        if (!accessRes) return;
+        try {
+          await requestAccess();
+        } catch {
+          setWallet((prev) => ({
+            ...prev,
+            error: "Connection rejected by user.",
+          }));
+          return;
+        }
       }
+
       const addrRes = await getAddress();
       if (addrRes.address) {
         setWallet({
           address: addrRes.address,
           connected: true,
           network: getActiveNetwork(),
+          freighterDetected: true,
+          error: null,
         });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Wallet connection error:", e);
+      setWallet((prev) => ({
+        ...prev,
+        error: e?.message || "Failed to connect wallet.",
+      }));
     }
-  }, []);
+  }, [detectFreighter]);
 
   const disconnect = useCallback(() => {
-    setWallet({ address: null, connected: false, network: "testnet" });
+    setWallet({
+      address: null,
+      connected: false,
+      network: "testnet",
+      freighterDetected: true,
+      error: null,
+    });
   }, []);
 
   useEffect(() => {
+    detectFreighter();
     const check = async () => {
       try {
         const { isConnected: conn } = await isConnected();
@@ -62,6 +106,8 @@ export function useWallet() {
               address: addrRes.address,
               connected: true,
               network: getActiveNetwork(),
+              freighterDetected: true,
+              error: null,
             });
           }
         }
@@ -70,14 +116,13 @@ export function useWallet() {
       }
     };
     check();
-  }, []);
+  }, [detectFreighter]);
 
   return { wallet, connect, disconnect };
 }
 
 // ─────────────── Generated Typed Client ───────────────
-// Import the auto-generated type-safe client from `stellar contract bindings typescript`
-// Uses relative path to avoid file: dependency resolution issues on hosting platforms
+// Uses relative import to avoid package resolution issues on hosting platforms
 
 import * as Contract from "../../packages/contract/src/index";
 import { signTransaction } from "@stellar/freighter-api";
@@ -87,7 +132,6 @@ const CONTRACT_ID = contractNetworks.testnet.contractId;
 
 let _client: Contract.Client | null = null;
 
-/** Get or create a typed contract Client instance */
 export function getContractClient(rpcUrl?: string): Contract.Client {
   if (!_client) {
     _client = new Contract.Client({
@@ -99,7 +143,6 @@ export function getContractClient(rpcUrl?: string): Contract.Client {
   return _client;
 }
 
-/** Sign and send an AssembledTransaction using Freighter */
 export async function signAndSend<T>(
   tx: Contract.contract.AssembledTransaction<T>,
 ) {
@@ -111,7 +154,6 @@ export async function signAndSend<T>(
   });
 }
 
-/** Typed wrapper: record a gas fee on-chain */
 export async function recordFee(
   network: string,
   baseFee: bigint,
@@ -122,14 +164,12 @@ export async function recordFee(
   return signAndSend(tx);
 }
 
-/** Typed wrapper: set a token price on-chain */
 export async function setPrice(token: string, price: bigint) {
   const client = getContractClient();
   const tx = await client.set_price({ token, price });
   return signAndSend(tx);
 }
 
-/** Typed wrapper: get recent fees */
 export async function getFees(
   network: string,
   limit: number,
@@ -139,14 +179,12 @@ export async function getFees(
   return tx.result;
 }
 
-/** Typed wrapper: get token price */
 export async function getPrice(token: string): Promise<bigint> {
   const client = getContractClient();
   const tx = await client.get_price({ token });
   return tx.result;
 }
 
-/** Typed wrapper: get user spending in a time range */
 export async function getSpending(
   user: string,
   fromTs: bigint,
@@ -157,7 +195,6 @@ export async function getSpending(
   return tx.result;
 }
 
-/** Typed wrapper: get recent transactions for a user */
 export async function getTxs(
   user: string,
   limit: number,
@@ -167,7 +204,6 @@ export async function getTxs(
   return tx.result;
 }
 
-/** Typed wrapper: estimate deployment cost */
 export async function getDeployCost(
   codeSize: bigint,
   network: string,
@@ -196,9 +232,11 @@ export function useGasFeeData() {
     timestamp: Date.now(),
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [fees, price] = await Promise.all([
         getNetworkFee(),
@@ -211,8 +249,9 @@ export function useGasFeeData() {
         surge: fees.surge,
         timestamp: Date.now(),
       });
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to fetch fee data:", e);
+      setError(e?.message || "Failed to fetch fees");
     } finally {
       setLoading(false);
     }
@@ -227,7 +266,7 @@ export function useGasFeeData() {
   const txFeeXLM = parseInt(feeData.sorobanFee) / 10_000_000;
   const txFeeUSD = txFeeXLM * feeData.xlmPrice;
 
-  return { feeData, txFeeXLM, txFeeUSD, loading, refresh };
+  return { feeData, txFeeXLM, txFeeUSD, loading, error, refresh };
 }
 
 // ─────────────── Analysis Calculations ───────────────
@@ -355,5 +394,41 @@ export function calculateDeployCost(
     withGasXLM: (totalStroops + gasStroops) / 10_000_000,
     withGasUSD: ((totalStroops + gasStroops) / 10_000_000) * xlmPrice,
     network,
+  };
+}
+
+// ─────────────── Real-Time Calculator ───────────────
+
+export interface TxCalculation {
+  txType: string;
+  baseFeeStroops: number;
+  feeXLM: number;
+  feeUSD: number;
+  gasXLM: number;
+  gasUSD: number;
+  totalXLM: number;
+  totalUSD: number;
+}
+
+export function calculateTxCost(
+  txType: string,
+  sorobanFee: string,
+  xlmPrice: number,
+): TxCalculation {
+  const baseStroops = parseInt(sorobanFee);
+  const multiplier =
+    txType === "simple" ? 1 : txType === "swap" ? 3 : txType === "contract" ? 5 : 2;
+  const totalStroops = baseStroops * multiplier;
+  const feeXLM = totalStroops / 10_000_000;
+  const gasXLM = feeXLM * 0.1;
+  return {
+    txType,
+    baseFeeStroops: totalStroops,
+    feeXLM,
+    feeUSD: feeXLM * xlmPrice,
+    gasXLM,
+    gasUSD: gasXLM * xlmPrice,
+    totalXLM: feeXLM + gasXLM,
+    totalUSD: (feeXLM + gasXLM) * xlmPrice,
   };
 }
