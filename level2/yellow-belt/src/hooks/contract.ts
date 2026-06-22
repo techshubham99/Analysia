@@ -77,8 +77,9 @@ export function useWallet() {
 
 // ─────────────── Generated Typed Client ───────────────
 // Import the auto-generated type-safe client from `stellar contract bindings typescript`
+// Uses relative path to avoid file: dependency resolution issues on hosting platforms
 
-import * as Contract from "contract";
+import * as Contract from "../../packages/contract/src/index";
 import { signTransaction } from "@stellar/freighter-api";
 
 const contractNetworks = Contract.networks;

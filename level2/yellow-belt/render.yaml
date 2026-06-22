@@ -6,7 +6,7 @@ services:
   - type: web
     name: stellargas-calculator
     env: static
-    buildCommand: bun install && bun run build
+    buildCommand: cd level2/yellow-belt && bun install && bun run build
     staticPublishPath: out
     headers:
       - path: /*
