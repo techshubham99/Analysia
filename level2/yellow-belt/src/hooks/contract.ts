@@ -101,7 +101,7 @@ export function getContractClient(rpcUrl?: string): Contract.Client {
 
 /** Sign and send an AssembledTransaction using Freighter */
 export async function signAndSend<T>(
-  tx: import("contract").contract.AssembledTransaction<T>,
+  tx: Contract.contract.AssembledTransaction<T>,
 ) {
   const signed = await signTransaction(tx.toXDR(), {
     networkPassphrase: contractNetworks.testnet.networkPassphrase,
