@@ -152,3 +152,8 @@ mainnet: total = 500_000_000 + (bytes × 1_000) stroops
 ## License
 
 MIT
+
+
+---
+### Stellar Smart Contract Address
+`CBVLE4GF7EHU7C2VZOXIPYHLA3QGLSF6ZJXCR5K5OFSAIKEEKRDO5JNG`
